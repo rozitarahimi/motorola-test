@@ -22,6 +22,16 @@ class SampleStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not enough lines"):
             store.sample(1)
 
+    def test_load_non_utf8_file(self) -> None:
+        store = SampleStore()
+        with tempfile.TemporaryDirectory() as directory:
+            text_file = Path(directory) / "records.txt"
+            text_file.write_text("café\nniño\n", encoding="latin-1")
+
+            self.assertEqual(store.load(text_file, encoding="latin-1"), 2)
+
+        self.assertCountEqual(store.sample(2), ["café", "niño"])
+
     def test_concurrent_samples_never_return_same_record(self) -> None:
         store = SampleStore()
         store.load([f"record-{index}\n" for index in range(100)])
@@ -44,6 +54,10 @@ class SampleStoreTests(unittest.TestCase):
 
                 self.assertEqual(client.load(text_file), 2)
                 self.assertCountEqual(client.sample(2), ["one", "two"])
+
+                text_file.write_text("café\n€uro", encoding="cp1252")
+                self.assertEqual(client.load(text_file, encoding="cp1252"), 2)
+                self.assertCountEqual(client.sample(2), ["café", "€uro"])
         finally:
             server.shutdown()
             server.server_close()

@@ -18,10 +18,12 @@ class SampleStore:
 		self._lines: list[str] = []
 		self._lock = threading.Lock()
 
-	def load(self, source: str | Path | TextIO | Iterable[str]) -> int:
-		"""Append lines from a UTF-8 file path or open text stream."""
+	def load(
+		self, source: str | Path | TextIO | Iterable[str], encoding: str = "utf-8"
+	) -> int:
+		"""Append lines from a text file path or open text stream."""
 		if isinstance(source, (str, Path)):
-			with Path(source).open("r", encoding="utf-8", newline=None) as file:
+			with Path(source).open("r", encoding=encoding, newline=None) as file:
 				return self._append_lines(file)
 		return self._append_lines(source)
 
@@ -75,8 +77,11 @@ class SampleRequestHandler(BaseHTTPRequestHandler):
 
 		if self.path == "/load":
 			try:
-				loaded = self.store.load(self._request_lines(content_length))
-			except (UnicodeDecodeError, OSError, ValueError) as error:
+				encoding = self.headers.get_content_charset() or "utf-8"
+				loaded = self.store.load(
+					self._request_lines(content_length, encoding)
+				)
+			except (LookupError, UnicodeDecodeError, OSError, ValueError) as error:
 				self._send_json(400, {"error": str(error)})
 				return
 			self._send_json(200, {"loaded": loaded})
@@ -98,8 +103,8 @@ class SampleRequestHandler(BaseHTTPRequestHandler):
 
 		self._send_json(404, {"error": "unknown endpoint"})
 
-	def _request_lines(self, content_length: int) -> Iterable[str]:
-		decoder = codecs.getincrementaldecoder("utf-8")()
+	def _request_lines(self, content_length: int, encoding: str) -> Iterable[str]:
+		decoder = codecs.getincrementaldecoder(encoding)()
 		remaining = content_length
 		buffered = ""
 
@@ -147,15 +152,18 @@ class SampleClient:
 		self.port = port
 		self.timeout = timeout
 
-	def load(self, file_path: str | Path) -> int:
-		"""Stream a UTF-8 text file to the server and return its line count."""
+	def load(self, file_path: str | Path, encoding: str = "utf-8") -> int:
+		"""Stream a text file to the server and return its line count."""
 		path = Path(file_path)
 		with path.open("rb") as file:
 			content_length = path.stat().st_size
 			response = self._request(
 				"/load",
 				file,
-				{"Content-Type": "text/plain; charset=utf-8", "Content-Length": str(content_length)},
+				{
+					"Content-Type": f"text/plain; charset={codecs.lookup(encoding).name}",
+					"Content-Length": str(content_length),
+				},
 			)
 		return int(response["loaded"])
 
