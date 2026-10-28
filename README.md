@@ -30,3 +30,11 @@ There are several reasonable policies for `sample(N)` when fewer than `N` record
 - **Refill or retry:** load more records from a configured source or ask the caller to retry. This is useful when the cache is backed by a durable source, but needs a defined source and retry policy.
 
 The current fail-immediately behavior is atomic: if there are not enough records, none are removed. Run the tests with `python -m unittest`.
+
+### Other design choices
+
+- **Cache lifetime and capacity:** the cache is in memory, shared by clients of this server process, and has no size limit. Restarting the process clears it; a long-running service with large inputs may need persistence and a capacity/backpressure policy.
+- **Duplicate records:** repeated lines are kept as separate records and can each be sampled once. Deduplicating would change the meaning of the requested sample size.
+- **Line boundaries:** each line separator is removed when loading, and sampled records contain only the record contents. Blank lines between separators are records; a final newline does not add an extra record. Line-ending style is therefore not preserved.
+- **Load failures:** loading appends records as it reads them. If decoding or reading fails partway through, records already appended remain in the cache. Staging a whole load before appending would provide all-or-nothing behavior, but would require additional memory (or temporary storage) for large files.
+- **Randomness:** sampling uses Python's standard pseudo-random sampling, suitable for ordinary random selection but not for security-sensitive or cryptographic use.
