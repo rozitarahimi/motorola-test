@@ -17,7 +17,10 @@ class SampleStoreTests(unittest.TestCase):
             self.assertEqual(store.load(text_file), 3)
 
         samples = store.sample(3)
-        self.assertCountEqual(samples, ["first", "second", "third"])
+        self.assertCountEqual(
+            [sample.data.decode(sample.encoding) for sample in samples],
+            ["first", "second", "third"],
+        )
         self.assertEqual(store.sample(0), [])
         with self.assertRaisesRegex(ValueError, "not enough lines"):
             store.sample(1)
@@ -30,7 +33,22 @@ class SampleStoreTests(unittest.TestCase):
 
             self.assertEqual(store.load(text_file, encoding="latin-1"), 2)
 
-        self.assertCountEqual(store.sample(2), ["café", "niño"])
+        samples = store.sample(2)
+        self.assertCountEqual(
+            [(sample.data, sample.encoding) for sample in samples],
+            [(b"caf\xe9", "iso8859-1"), (b"ni\xf1o", "iso8859-1")],
+        )
+
+    def test_sample_retains_each_record_encoding(self) -> None:
+        store = SampleStore()
+        store.load(["café\n"], encoding="cp1252")
+        store.load(["café\n"], encoding="utf-8")
+
+        samples = store.sample(2)
+        self.assertCountEqual(
+            [(sample.data, sample.encoding) for sample in samples],
+            [(b"caf\xe9", "cp1252"), ("café".encode("utf-8"), "utf-8")],
+        )
 
     def test_concurrent_samples_never_return_same_record(self) -> None:
         store = SampleStore()
@@ -53,11 +71,17 @@ class SampleStoreTests(unittest.TestCase):
                 text_file.write_text("one\ntwo", encoding="utf-8")
 
                 self.assertEqual(client.load(text_file), 2)
-                self.assertCountEqual(client.sample(2), ["one", "two"])
+                self.assertCountEqual(
+                    [sample.data.decode(sample.encoding) for sample in client.sample(2)],
+                    ["one", "two"],
+                )
 
                 text_file.write_text("café\n€uro", encoding="cp1252")
                 self.assertEqual(client.load(text_file, encoding="cp1252"), 2)
-                self.assertCountEqual(client.sample(2), ["café", "€uro"])
+                self.assertCountEqual(
+                    [(sample.data, sample.encoding) for sample in client.sample(2)],
+                    [(b"caf\xe9", "cp1252"), (b"\x80uro", "cp1252")],
+                )
         finally:
             server.shutdown()
             server.server_close()

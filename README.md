@@ -18,6 +18,6 @@ loaded = client.load("large-text-file.txt", encoding="cp1252")
 records = client.sample(10)
 ```
 
-`SampleStore.load()` also accepts an optional `encoding` argument when loading from a file path. Records are decoded to Unicode when loaded and returned as strings by `sample()`.
+`SampleStore.load()` and `SampleClient.load()` accept an optional `encoding` argument, defaulting to UTF-8. Each sampled item is a `SampleRecord`: its `data` field contains bytes in the original encoding, and its `encoding` field identifies that encoding. For example, decode a sample with `record.data.decode(record.encoding)`. Over HTTP, bytes are base64-encoded in JSON and decoded by `SampleClient`.
 
 Sampling more records than remain raises an error and does not change the cache. Run the tests with `python -m unittest`.

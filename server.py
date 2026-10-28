@@ -1,43 +1,54 @@
 from __future__ import annotations
 
+import base64
 import codecs
 import http.client
 import json
 import random
 import threading
+from dataclasses import dataclass
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Iterable, TextIO
 
 
+@dataclass(frozen=True)
+class SampleRecord:
+	"""A sampled record encoded as bytes, with its source encoding."""
+
+	data: bytes
+	encoding: str
+
+
 class SampleStore:
 	"""Thread-safe storage for newline-delimited text records."""
 
 	def __init__(self) -> None:
-		self._lines: list[str] = []
+		self._lines: list[tuple[str, str]] = []
 		self._lock = threading.Lock()
 
 	def load(
 		self, source: str | Path | TextIO | Iterable[str], encoding: str = "utf-8"
 	) -> int:
-		"""Append lines from a text file path or open text stream."""
+		"""Append text lines, retaining the encoding used to read them."""
+		encoding = codecs.lookup(encoding).name
 		if isinstance(source, (str, Path)):
 			with Path(source).open("r", encoding=encoding, newline=None) as file:
-				return self._append_lines(file)
-		return self._append_lines(source)
+				return self._append_lines(file, encoding)
+		return self._append_lines(source, encoding)
 
-	def _append_lines(self, lines: Iterable[str]) -> int:
+	def _append_lines(self, lines: Iterable[str], encoding: str) -> int:
 		count = 0
 		for raw_line in lines:
 			line = raw_line.removesuffix("\n").removesuffix("\r")
 			with self._lock:
-				self._lines.append(line)
+				self._lines.append((line, encoding))
 			count += 1
 		return count
 
-	def sample(self, count: int) -> list[str]:
-		"""Return and remove count randomly chosen lines."""
+	def sample(self, count: int) -> list[SampleRecord]:
+		"""Return and remove random lines encoded with their original encodings."""
 		if not isinstance(count, int):
 			raise TypeError("count must be an integer")
 		if count < 0:
@@ -48,7 +59,10 @@ class SampleStore:
 				raise ValueError("not enough lines available")
 
 			indices = random.sample(range(len(self._lines)), count)
-			selected = [self._lines[index] for index in indices]
+			selected = []
+			for index in indices:
+				line, encoding = self._lines[index]
+				selected.append(SampleRecord(line.encode(encoding), encoding))
 			for index in sorted(indices, reverse=True):
 				last_line = self._lines.pop()
 				if index < len(self._lines):
@@ -79,7 +93,7 @@ class SampleRequestHandler(BaseHTTPRequestHandler):
 			try:
 				encoding = self.headers.get_content_charset() or "utf-8"
 				loaded = self.store.load(
-					self._request_lines(content_length, encoding)
+					self._request_lines(content_length, encoding), encoding=encoding
 				)
 			except (LookupError, UnicodeDecodeError, OSError, ValueError) as error:
 				self._send_json(400, {"error": str(error)})
@@ -98,7 +112,18 @@ class SampleRequestHandler(BaseHTTPRequestHandler):
 				status = 409 if str(error) == "not enough lines available" else 400
 				self._send_json(status, {"error": str(error)})
 				return
-			self._send_json(200, {"lines": sampled})
+			self._send_json(
+				200,
+				{
+					"lines": [
+						{
+							"data": base64.b64encode(record.data).decode("ascii"),
+							"encoding": record.encoding,
+						}
+						for record in sampled
+					]
+				},
+			)
 			return
 
 		self._send_json(404, {"error": "unknown endpoint"})
@@ -167,14 +192,32 @@ class SampleClient:
 			)
 		return int(response["loaded"])
 
-	def sample(self, count: int) -> list[str]:
+	def sample(self, count: int) -> list[SampleRecord]:
 		body = json.dumps({"count": count}).encode("utf-8")
 		response = self._request(
 			"/sample",
 			body,
 			{"Content-Type": "application/json", "Content-Length": str(len(body))},
 		)
-		return list(response["lines"])
+		lines = response.get("lines")
+		if not isinstance(lines, list):
+			raise RuntimeError("server returned an invalid sample response")
+
+		samples: list[SampleRecord] = []
+		for line in lines:
+			if (
+				not isinstance(line, dict)
+				or not isinstance(line.get("data"), str)
+				or not isinstance(line.get("encoding"), str)
+			):
+				raise RuntimeError("server returned an invalid sample record")
+			samples.append(
+				SampleRecord(
+					base64.b64decode(line["data"], validate=True),
+					line["encoding"],
+				)
+			)
+		return samples
 
 	def _request(
 		self, path: str, body: object, headers: dict[str, str]
