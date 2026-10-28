@@ -8,6 +8,21 @@ from server import SampleClient, SampleStore, create_server
 
 
 class SampleStoreTests(unittest.TestCase):
+    def test_load_and_sample_test_jsonl(self) -> None:
+        fixture = Path(__file__).with_name("test.jsonl")
+        expected_lines = fixture.read_text(encoding="utf-8").splitlines()
+        store = SampleStore()
+
+        self.assertGreater(len(expected_lines), 0)
+        self.assertEqual(store.load(fixture), len(expected_lines))
+
+        samples = store.sample(len(expected_lines))
+        self.assertCountEqual(
+            [(sample.data, sample.encoding) for sample in samples],
+            [(line.encode("utf-8"), "utf-8") for line in expected_lines],
+        )
+        self.assertEqual(store.sample(0), [])
+
     def test_load_and_sample_remove_lines(self) -> None:
         store = SampleStore()
         with tempfile.TemporaryDirectory() as directory:
